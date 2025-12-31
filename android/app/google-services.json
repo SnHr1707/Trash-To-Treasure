@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "177753038878",
+    "project_id": "trashtotreasure-7f7f1",
+    "storage_bucket": "trashtotreasure-7f7f1.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:177753038878:android:2aeea56ce2ce56ab5a4e0f",
+        "android_client_info": {
+          "package_name": "com.example.trash_to_treasure"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "177753038878-l339kj9i73nctg04jpt7srcgt2d4atqs.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.trash_to_treasure",
+            "certificate_hash": "6af466bfa39a3a0c6bf4cdd99b886de8d4d6b8aa"
+          }
+        },
+        {
+          "client_id": "177753038878-euo3pad6c8v3r284rejf226bqqohskgs.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBCup3d8dsNxxVr_8XnnUe6aJrLqMban4E"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "177753038878-euo3pad6c8v3r284rejf226bqqohskgs.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "177753038878-1ug9g3n4qnm1d030knhge4bud5k9hfl5.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.trashToTreasure"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

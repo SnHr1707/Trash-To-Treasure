@@ -17,7 +17,7 @@ class _AIScannerPageState extends State<AIScannerPage> {
   // Initialize Gemini
   final model = GenerativeModel(
     model: 'gemini-1.5-flash', 
-    apiKey: 'AIzaSyB0bMWt_IDhB6hVMtLJTH5s0k7-vipomCk',
+    apiKey: '',
   );
 
   Future<void> _analyzeImage() async {

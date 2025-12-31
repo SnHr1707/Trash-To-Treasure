@@ -36,7 +36,7 @@ class _HouseholdScreenState extends State<HouseholdScreen> {
   }
 }
 
-// ---------------- TAB 1: SELL WASTE (Multi-Image Support) ---------------- //
+// ---------------- TAB 1: SELL WASTE (Flexible Image Input) ---------------- //
 class RequestTab extends StatefulWidget {
   @override
   _RequestTabState createState() => _RequestTabState();
@@ -52,38 +52,59 @@ class _RequestTabState extends State<RequestTab> {
   final TextEditingController _notesController = TextEditingController();
   final TextEditingController _priceController = TextEditingController();
 
-  // Env variables
   final String cloudName = dotenv.env['CLOUDINARY_CLOUD_NAME'] ?? "";
   final String uploadPreset = dotenv.env['CLOUDINARY_UPLOAD_PRESET'] ?? "";
   final String openRouterKey = dotenv.env['OPENROUTER_API_KEY'] ?? "";
   final String modelName = "nvidia/nemotron-nano-12b-v2-vl:free"; 
 
-  Future<void> _pickImages() async {
+  // Combined function to handle both Camera and Gallery
+  Future<void> _pickImages(ImageSource source) async {
     final picker = ImagePicker();
-    final List<XFile>? photos = await picker.pickMultiImage();
     
-    if (photos != null && photos.isNotEmpty) {
-      List<Uint8List> bytesList = [];
-      for (var photo in photos) {
-        bytesList.add(await photo.readAsBytes());
+    if (source == ImageSource.gallery) {
+      // Pick Multiple from Gallery
+      final List<XFile>? photos = await picker.pickMultiImage();
+      if (photos != null && photos.isNotEmpty) {
+        for (var photo in photos) {
+          var bytes = await photo.readAsBytes();
+          setState(() {
+            _pickedFiles.add(photo);
+            _imageBytesList.add(bytes);
+          });
+        }
+        // Analyze the first image added if not already analyzed
+        if (!_isAnalyzing && _imageBytesList.isNotEmpty) {
+           _analyzeWithNvidia(_imageBytesList.first);
+        }
       }
-      
-      setState(() { 
-        _imageBytesList = bytesList; 
-        _pickedFiles = photos; 
-        _isAnalyzing = true; 
-      });
-      
-      // Analyze only the first image to save resources/time
-      await _analyzeWithNvidia(bytesList.first);
+    } else {
+      // Pick Single from Camera
+      final XFile? photo = await picker.pickImage(source: ImageSource.camera);
+      if (photo != null) {
+        var bytes = await photo.readAsBytes();
+        setState(() {
+          _pickedFiles.add(photo);
+          _imageBytesList.add(bytes);
+        });
+        // Analyze immediately if it's the first/only image
+        if (!_isAnalyzing) {
+           _analyzeWithNvidia(bytes);
+        }
+      }
     }
   }
 
+  void _removeImage(int index) {
+    setState(() {
+      _imageBytesList.removeAt(index);
+      _pickedFiles.removeAt(index);
+    });
+  }
+
   Future<void> _analyzeWithNvidia(Uint8List imageBytes) async {
-    if (openRouterKey.isEmpty) {
-      setState(() { _aiResult = "API Key Missing (Check .env)"; _isAnalyzing = false; });
-      return;
-    }
+    if (openRouterKey.isEmpty) return;
+    setState(() => _isAnalyzing = true);
+    
     try {
       String base64Image = base64Encode(imageBytes);
       final response = await http.post(
@@ -108,7 +129,7 @@ class _RequestTabState extends State<RequestTab> {
         }
         setState(() { _aiResult = content; _detectedCategory = cat; _isAnalyzing = false; });
       } else {
-        setState(() { _aiResult = "AI Error: ${response.statusCode}"; _isAnalyzing = false; });
+        setState(() { _aiResult = "AI Error. Try again."; _isAnalyzing = false; });
       }
     } catch (e) { setState(() { _aiResult = "Connection Error"; _isAnalyzing = false; }); }
   }
@@ -122,9 +143,9 @@ class _RequestTabState extends State<RequestTab> {
     try {
       List<String> uploadedUrls = [];
 
-      // 1. Loop Upload to Cloudinary
       for (int i = 0; i < _imageBytesList.length; i++) {
         var request = http.MultipartRequest("POST", Uri.parse("https://api.cloudinary.com/v1_1/$cloudName/image/upload"));
+        // Handle Web vs Mobile file source
         if (kIsWeb) {
           request.files.add(http.MultipartFile.fromBytes('file', _imageBytesList[i], filename: 'waste_$i.jpg'));
         } else {
@@ -138,7 +159,6 @@ class _RequestTabState extends State<RequestTab> {
         }
       }
 
-      // 2. Get User Info
       final user = FirebaseAuth.instance.currentUser!;
       final userDoc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
       String userPhone = userDoc.exists ? (userDoc.data()?['phone'] ?? "Not Provided") : "Not Provided";
@@ -148,7 +168,6 @@ class _RequestTabState extends State<RequestTab> {
         pos = Position(longitude: 0, latitude: 0, timestamp: DateTime.now(), accuracy: 0, altitude: 0, heading: 0, speed: 0, speedAccuracy: 0, altitudeAccuracy: 0, headingAccuracy: 0); 
       }
 
-      // 3. Save Request
       await FirebaseFirestore.instance.collection('requests').add({
         'userId': user.uid,
         'userName': user.displayName ?? 'Anonymous',
@@ -156,10 +175,10 @@ class _RequestTabState extends State<RequestTab> {
         'wasteInfo': _aiResult, 
         'category': _detectedCategory,
         'askPrice': _priceController.text, 
-        'imageUrls': uploadedUrls, // NEW: List of Strings
-        'imageUrl': uploadedUrls.isNotEmpty ? uploadedUrls.first : null, // Backward compat
+        'imageUrls': uploadedUrls, 
+        'imageUrl': uploadedUrls.isNotEmpty ? uploadedUrls.first : null,
         'notes': _notesController.text,
-        'status': 'pending', // pending, negotiating, accepted, completed, cancelled
+        'status': 'pending', 
         'latitude': pos.latitude,
         'longitude': pos.longitude,
         'timestamp': FieldValue.serverTimestamp(),
@@ -188,27 +207,76 @@ class _RequestTabState extends State<RequestTab> {
         padding: EdgeInsets.all(20),
         child: Column(
           children: [
-            GestureDetector(
-              onTap: _pickImages,
-              child: Container(
-                height: 200, width: double.infinity,
-                decoration: BoxDecoration(color: Colors.grey[200], borderRadius: BorderRadius.circular(15), border: Border.all(color: Colors.green)),
-                child: _imageBytesList.isEmpty 
-                  ? Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.add_photo_alternate, size: 50), Text("1. Tap to select photos")]) 
-                  : ListView.builder(
-                      scrollDirection: Axis.horizontal,
-                      itemCount: _imageBytesList.length,
-                      itemBuilder: (context, index) {
-                        return Padding(
-                          padding: const EdgeInsets.all(8.0),
-                          child: ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.memory(_imageBytesList[index])),
-                        );
-                      },
-                    ),
-              ),
+            // 1. Image Selection Area
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: () => _pickImages(ImageSource.camera),
+                    icon: Icon(Icons.camera_alt),
+                    label: Text("Camera"),
+                    style: ElevatedButton.styleFrom(padding: EdgeInsets.symmetric(vertical: 15), backgroundColor: Colors.blue[50]),
+                  ),
+                ),
+                SizedBox(width: 10),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: () => _pickImages(ImageSource.gallery),
+                    icon: Icon(Icons.photo_library),
+                    label: Text("Gallery"),
+                    style: ElevatedButton.styleFrom(padding: EdgeInsets.symmetric(vertical: 15), backgroundColor: Colors.blue[50]),
+                  ),
+                ),
+              ],
             ),
+            
+            SizedBox(height: 10),
+            
+            // Image List with Remove Button
+            if (_imageBytesList.isNotEmpty)
+              Container(
+                height: 120,
+                child: ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: _imageBytesList.length,
+                  itemBuilder: (context, index) {
+                    return Stack(
+                      children: [
+                        Container(
+                          margin: EdgeInsets.only(right: 10, top: 10),
+                          width: 100, height: 100,
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(10),
+                            child: Image.memory(_imageBytesList[index], fit: BoxFit.cover),
+                          ),
+                        ),
+                        Positioned(
+                          right: 0, top: 0,
+                          child: GestureDetector(
+                            onTap: () => _removeImage(index),
+                            child: CircleAvatar(
+                              radius: 12, backgroundColor: Colors.red,
+                              child: Icon(Icons.close, size: 16, color: Colors.white),
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+
+            if (_imageBytesList.isEmpty)
+              Container(
+                height: 100, width: double.infinity,
+                margin: EdgeInsets.symmetric(vertical: 10),
+                decoration: BoxDecoration(border: Border.all(color: Colors.grey), borderRadius: BorderRadius.circular(10)),
+                child: Center(child: Text("No images selected", style: TextStyle(color: Colors.grey))),
+              ),
+            
             SizedBox(height: 20),
             
+            // AI Result
             Container(
               padding: EdgeInsets.all(15),
               decoration: BoxDecoration(color: Colors.blue[50], borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.blue.shade200)),
@@ -250,7 +318,7 @@ class _RequestTabState extends State<RequestTab> {
   }
 }
 
-// ---------------- TAB 2: ACTIVITY (Toggle Ongoing/History & Negotiation) ---------------- //
+// ---------------- TAB 2: ACTIVITY (Cancel Added) ---------------- //
 class ActivityTab extends StatefulWidget {
   @override
   _ActivityTabState createState() => _ActivityTabState();
@@ -260,22 +328,44 @@ class _ActivityTabState extends State<ActivityTab> {
   final user = FirebaseAuth.instance.currentUser!;
   String _searchQuery = "";
   String _selectedCategory = "All";
-  bool _showHistory = false; // Toggle state
+  bool _showHistory = false;
 
   void _handleNegotiation(DocumentSnapshot doc, bool accept) async {
     if (accept) {
       await doc.reference.update({
         'status': 'accepted',
-        'askPrice': doc['offeredPrice'], // Update price to agreed amount
+        'askPrice': doc['offeredPrice'],
         'offeredPrice': FieldValue.delete(),
       });
     } else {
       await doc.reference.update({
-        'status': 'pending', // Go back to pending to find other collectors
-        'offeredPrice': FieldValue.delete(), // Remove rejected offer
+        'status': 'pending',
+        'offeredPrice': FieldValue.delete(),
         'collectorId': FieldValue.delete(),
         'collectorName': FieldValue.delete(),
       });
+    }
+  }
+
+  // NEW: Cancel Request Function
+  Future<void> _cancelRequest(String docId) async {
+    bool? confirm = await showDialog(
+      context: context, 
+      builder: (context) => AlertDialog(
+        title: Text("Cancel Request?"),
+        content: Text("Are you sure you want to remove this listing?"),
+        actions: [
+          TextButton(onPressed: ()=>Navigator.pop(context, false), child: Text("No")),
+          TextButton(onPressed: ()=>Navigator.pop(context, true), child: Text("Yes, Cancel")),
+        ],
+      )
+    );
+
+    if (confirm == true) {
+      await FirebaseFirestore.instance.collection('requests').doc(docId).update({
+        'status': 'cancelled'
+      });
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Request Cancelled")));
     }
   }
 
@@ -330,7 +420,6 @@ class _ActivityTabState extends State<ActivityTab> {
       appBar: AppBar(title: Text("My Activity"), centerTitle: true),
       body: Column(
         children: [
-          // 1. TOGGLE BUTTON (Ongoing vs History)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 10),
             child: SegmentedButton<bool>(
@@ -345,7 +434,6 @@ class _ActivityTabState extends State<ActivityTab> {
             ),
           ),
 
-          // 2. SEARCH & FILTER
           Container(
             padding: EdgeInsets.symmetric(horizontal: 10),
             child: Column(
@@ -382,7 +470,6 @@ class _ActivityTabState extends State<ActivityTab> {
             ),
           ),
           
-          // 3. LIST OF ACTIVITY
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
               stream: FirebaseFirestore.instance.collection('requests')
@@ -392,16 +479,13 @@ class _ActivityTabState extends State<ActivityTab> {
               builder: (context, snapshot) {
                 if (!snapshot.hasData) return Center(child: CircularProgressIndicator());
                 
-                // CLIENT SIDE FILTERING (Status + Search + Category)
                 var docs = snapshot.data!.docs.where((doc) {
                   var data = doc.data() as Map<String, dynamic>;
                   String status = data['status'];
                   
-                  // Toggle Logic
                   bool isHistory = (status == 'completed' || status == 'cancelled');
                   if (_showHistory != isHistory) return false;
 
-                  // Search & Cat Logic
                   String info = data['wasteInfo'].toString().toLowerCase();
                   String cat = (data['category'] ?? "").toString();
                   bool matchesSearch = info.contains(_searchQuery);
@@ -410,13 +494,7 @@ class _ActivityTabState extends State<ActivityTab> {
                   return matchesSearch && matchesCategory;
                 }).toList();
 
-                if (docs.isEmpty) return Center(child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.inbox, size: 50, color: Colors.grey),
-                    Text("No requests found."),
-                  ],
-                ));
+                if (docs.isEmpty) return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.inbox, size: 50, color: Colors.grey), Text("No requests found.")]));
 
                 return ListView(
                   children: docs.map((doc) {
@@ -425,7 +503,6 @@ class _ActivityTabState extends State<ActivityTab> {
                     String price = data['askPrice'] ?? "??";
                     String offeredPrice = data['offeredPrice'] ?? "";
                     
-                    // Handle image list or single string backward compatibility
                     String thumbUrl = "";
                     if (data['imageUrls'] != null && (data['imageUrls'] as List).isNotEmpty) {
                       thumbUrl = data['imageUrls'][0];
@@ -481,7 +558,18 @@ class _ActivityTabState extends State<ActivityTab> {
                               ),
                             ),
 
-                          // CONFIRMATION UI
+                          // CANCEL BUTTON (Only for pending/negotiating)
+                          if (status == 'pending' || status == 'negotiating')
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 8.0),
+                              child: OutlinedButton.icon(
+                                icon: Icon(Icons.cancel, size: 16),
+                                label: Text("CANCEL REQUEST"),
+                                style: OutlinedButton.styleFrom(foregroundColor: Colors.red, side: BorderSide(color: Colors.red)),
+                                onPressed: () => _cancelRequest(doc.id),
+                              ),
+                            ),
+
                           if (status == 'accepted' && !(data['householdConfirmed'] ?? false))
                             Padding(padding: EdgeInsets.all(8), child: ElevatedButton.icon(
                               icon: Icon(Icons.check_circle),
@@ -513,20 +601,35 @@ class _ActivityTabState extends State<ActivityTab> {
       case 'completed': return Colors.green;
       case 'negotiating': return Colors.red;
       case 'accepted': return Colors.blue;
+      case 'cancelled': return Colors.grey;
       default: return Colors.orange;
     }
   }
 }
 
-class FullHistoryScreen extends StatelessWidget {
+class FullHistoryScreen extends StatefulWidget {
   final Map<String, dynamic> data;
   FullHistoryScreen({required this.data});
 
   @override
+  _FullHistoryScreenState createState() => _FullHistoryScreenState();
+}
+
+class _FullHistoryScreenState extends State<FullHistoryScreen> {
+  int _currentImageIndex = 0;
+
+  @override
   Widget build(BuildContext context) {
-    String price = data['askPrice'] ?? "N/A";
-    List<dynamic> images = data['imageUrls'] ?? (data['imageUrl'] != null ? [data['imageUrl']] : []);
+    String price = widget.data['askPrice'] ?? "N/A";
     
+    // Logic to get all images
+    List<String> images = [];
+    if (widget.data['imageUrls'] != null) {
+      images = List<String>.from(widget.data['imageUrls']);
+    } else if (widget.data['imageUrl'] != null) {
+      images = [widget.data['imageUrl']];
+    }
+
     return Scaffold(
       appBar: AppBar(title: Text("Details")),
       body: SingleChildScrollView(
@@ -534,19 +637,44 @@ class FullHistoryScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // 📸 CAROUSEL / SLIDER LOGIC
             if (images.isNotEmpty) 
-              SizedBox(
-                height: 250,
-                child: PageView.builder(
-                  itemCount: images.length,
-                  itemBuilder: (context, index) {
-                    return Image.network(images[index], width: double.infinity, fit: BoxFit.cover);
-                  },
-                ),
+              Column(
+                children: [
+                  SizedBox(
+                    height: 300,
+                    child: PageView.builder(
+                      itemCount: images.length,
+                      onPageChanged: (index) {
+                        setState(() => _currentImageIndex = index);
+                      },
+                      itemBuilder: (context, index) {
+                        return Container(
+                          margin: EdgeInsets.symmetric(horizontal: 5),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(10),
+                            child: Image.network(images[index], fit: BoxFit.cover),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  SizedBox(height: 10),
+                  // Image Counter (e.g., 1/3)
+                  if (images.length > 1)
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                      decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(20)),
+                      child: Text(
+                        "${_currentImageIndex + 1} / ${images.length}",
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                ],
               ),
-            if (images.length > 1) Center(child: Padding(padding: EdgeInsets.all(8.0), child: Text("Swipe for more photos", style: TextStyle(color: Colors.grey)))),
-            
+
             SizedBox(height: 20),
+            
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -561,19 +689,19 @@ class FullHistoryScreen extends StatelessWidget {
               width: double.infinity,
               padding: EdgeInsets.all(10),
               decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(5)),
-              child: Text(data['wasteInfo'] ?? ""),
+              child: Text(widget.data['wasteInfo'] ?? ""),
             ),
             
             SizedBox(height: 10),
-            Text("Category: ${data['category'] ?? 'General'}"),
+            Text("Category: ${widget.data['category'] ?? 'General'}"),
             
             Divider(),
             Text("Collector Info:", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            Text("Name: ${data['collectorName'] ?? 'Pending'}"),
-            Text("Phone: ${data['collectorPhone'] ?? 'Not Available'}"), 
-            if (data.containsKey('rating')) Text("Your Rating: ${data['rating']} ⭐"),
+            Text("Name: ${widget.data['collectorName'] ?? 'Pending'}"),
+            Text("Phone: ${widget.data['collectorPhone'] ?? 'Not Available'}"), 
+            if (widget.data.containsKey('rating')) Text("Your Rating: ${widget.data['rating']} ⭐"),
             SizedBox(height: 20),
-            Center(child: Text("Status: ${data['status'].toUpperCase()}", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green, fontSize: 16))),
+            Center(child: Text("Status: ${widget.data['status'].toUpperCase()}", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green, fontSize: 16))),
           ],
         ),
       ),
@@ -619,15 +747,8 @@ class _ProfileTabState extends State<ProfileTab> {
       'email': user.email,
       'role': 'household',
     }, SetOptions(merge: true));
-    
-    if (_nameController.text.isNotEmpty) {
-      await user.updateDisplayName(_nameController.text.trim());
-    }
-    
-    if (mounted) {
-      setState(() => _isEditing = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Profile Updated!")));
-    }
+    if (_nameController.text.isNotEmpty) await user.updateDisplayName(_nameController.text.trim());
+    if (mounted) { setState(() => _isEditing = false); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Profile Updated!"))); }
   }
 
   String _getSafeInitials(String name) {
@@ -645,24 +766,12 @@ class _ProfileTabState extends State<ProfileTab> {
     String initials = _getSafeInitials(displayName);
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text("My Profile"), 
-        actions: [
-          IconButton(
-            icon: Icon(_isEditing ? Icons.save : Icons.edit),
-            onPressed: _isEditing ? _saveProfile : () => setState(() => _isEditing = true),
-          )
-        ]
-      ),
+      appBar: AppBar(title: Text("My Profile"), actions: [IconButton(icon: Icon(_isEditing ? Icons.save : Icons.edit), onPressed: _isEditing ? _saveProfile : () => setState(() => _isEditing = true))]),
       body: SingleChildScrollView(
         child: Column(
           children: [
             SizedBox(height: 20),
-            CircleAvatar(
-              radius: 50, 
-              backgroundColor: Colors.green[100], 
-              child: Text(initials, style: TextStyle(fontSize: 40, fontWeight: FontWeight.bold, color: Colors.green[800])),
-            ),
+            CircleAvatar(radius: 50, backgroundColor: Colors.green[100], child: Text(initials, style: TextStyle(fontSize: 40, fontWeight: FontWeight.bold, color: Colors.green[800]))),
             SizedBox(height: 20),
             StreamBuilder<QuerySnapshot>(
               stream: FirebaseFirestore.instance.collection('requests').where('userId', isEqualTo: user.uid).snapshots(),
@@ -670,45 +779,19 @@ class _ProfileTabState extends State<ProfileTab> {
                 if(!snapshot.hasData) return SizedBox();
                 int total = snapshot.data!.docs.length;
                 int completed = snapshot.data!.docs.where((d) => d['status'] == 'completed').length;
-                return Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    _statCard("Requests", "$total"),
-                    SizedBox(width: 20),
-                    _statCard("Sold", "$completed"),
-                  ],
-                );
+                return Row(mainAxisAlignment: MainAxisAlignment.center, children: [_statCard("Requests", "$total"), SizedBox(width: 20), _statCard("Sold", "$completed")]);
               },
             ),
             SizedBox(height: 20),
-            Padding(
-              padding: EdgeInsets.all(20),
-              child: Column(
-                children: [
-                  TextField(
-                    controller: _nameController, enabled: _isEditing,
-                    decoration: InputDecoration(labelText: "Full Name", prefixIcon: Icon(Icons.person), border: OutlineInputBorder()),
-                  ),
-                  SizedBox(height: 15),
-                  TextField(
-                    controller: _phoneController, enabled: _isEditing,
-                    decoration: InputDecoration(labelText: "Phone Number", prefixIcon: Icon(Icons.phone), border: OutlineInputBorder()),
-                  ),
-                  SizedBox(height: 15),
-                  TextField(
-                    enabled: false,
-                    controller: TextEditingController(text: user.email),
-                    decoration: InputDecoration(labelText: "Email", prefixIcon: Icon(Icons.email), border: OutlineInputBorder()),
-                  ),
-                ],
-              ),
-            ),
+            Padding(padding: EdgeInsets.all(20), child: Column(children: [
+              TextField(controller: _nameController, enabled: _isEditing, decoration: InputDecoration(labelText: "Full Name", prefixIcon: Icon(Icons.person), border: OutlineInputBorder())),
+              SizedBox(height: 15),
+              TextField(controller: _phoneController, enabled: _isEditing, decoration: InputDecoration(labelText: "Phone Number", prefixIcon: Icon(Icons.phone), border: OutlineInputBorder())),
+              SizedBox(height: 15),
+              TextField(enabled: false, controller: TextEditingController(text: user.email), decoration: InputDecoration(labelText: "Email", prefixIcon: Icon(Icons.email), border: OutlineInputBorder())),
+            ])),
             SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: () => FirebaseAuth.instance.signOut(),
-              child: Text("Logout"),
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-            )
+            ElevatedButton(onPressed: () => FirebaseAuth.instance.signOut(), child: Text("Logout"), style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white))
           ],
         ),
       ),
@@ -716,10 +799,6 @@ class _ProfileTabState extends State<ProfileTab> {
   }
 
   Widget _statCard(String label, String value) {
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: 30, vertical: 15),
-      decoration: BoxDecoration(color: Colors.green[50], borderRadius: BorderRadius.circular(10)),
-      child: Column(children: [Text(value, style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)), Text(label)]),
-    );
+    return Container(padding: EdgeInsets.symmetric(horizontal: 30, vertical: 15), decoration: BoxDecoration(color: Colors.green[50], borderRadius: BorderRadius.circular(10)), child: Column(children: [Text(value, style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)), Text(label)]));
   }
 }

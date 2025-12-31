@@ -31,7 +31,7 @@ class _CollectorScreenState extends State<CollectorScreen> {
   }
 }
 
-// ---------------- TAB 1: FIND JOBS (Negotiation Added) ---------------- //
+// ---------------- TAB 1: FIND JOBS ---------------- //
 class AvailableJobsTab extends StatefulWidget {
   @override
   _AvailableJobsTabState createState() => _AvailableJobsTabState();
@@ -119,7 +119,7 @@ class _AvailableJobsTabState extends State<AvailableJobsTab> {
             String wasteInfo = data['wasteInfo'].toString().split('|')[0];
             String estPrice = data['wasteInfo'].toString().contains('Price') ? data['wasteInfo'].toString().split('Price:')[1].split('|')[0] : "??";
             
-            // Image handling
+            // Image handling: Explicitly only take the first one for the list
             String imgUrl = "";
             if (data['imageUrls'] != null && (data['imageUrls'] as List).isNotEmpty) imgUrl = data['imageUrls'][0];
             else if (data['imageUrl'] != null) imgUrl = data['imageUrl'];
@@ -273,46 +273,107 @@ class ActiveJobsTab extends StatelessWidget {
   }
 }
 
-class JobDetailScreen extends StatelessWidget {
+class JobDetailScreen extends StatefulWidget {
   final Map<String, dynamic> data;
   JobDetailScreen({required this.data});
+
+  @override
+  _JobDetailScreenState createState() => _JobDetailScreenState();
+}
+
+class _JobDetailScreenState extends State<JobDetailScreen> {
+  int _currentImageIndex = 0;
+
   @override
   Widget build(BuildContext context) {
-    List<dynamic> images = data['imageUrls'] ?? (data['imageUrl'] != null ? [data['imageUrl']] : []);
+    // Logic to get all images
+    List<String> images = [];
+    if (widget.data['imageUrls'] != null) {
+      images = List<String>.from(widget.data['imageUrls']);
+    } else if (widget.data['imageUrl'] != null) {
+      images = [widget.data['imageUrl']];
+    }
 
     return Scaffold(
       appBar: AppBar(title: Text("Job Info")),
-      body: SingleChildScrollView(padding: EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        if (images.isNotEmpty) 
-          SizedBox(
-            height: 250,
-            child: PageView.builder(
-              itemCount: images.length,
-              itemBuilder: (context, index) {
-                return Image.network(images[index], width: double.infinity, fit: BoxFit.cover);
-              },
-            ),
-          ),
-        
-        SizedBox(height: 10),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      body: SingleChildScrollView(
+        padding: EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-             Text("Price:", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-             Text("₹${data['askPrice']}", style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.green)),
+            // 📸 CAROUSEL / SLIDER LOGIC
+            if (images.isNotEmpty) 
+              Column(
+                children: [
+                  SizedBox(
+                    height: 300, // Taller image view
+                    child: PageView.builder(
+                      itemCount: images.length,
+                      onPageChanged: (index) {
+                        setState(() => _currentImageIndex = index);
+                      },
+                      itemBuilder: (context, index) {
+                        return Container(
+                          margin: EdgeInsets.symmetric(horizontal: 5),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.grey[300]!),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(10),
+                            child: Image.network(images[index], fit: BoxFit.cover),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  SizedBox(height: 10),
+                  // Image Counter (e.g., 1/3)
+                  if (images.length > 1)
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                      decoration: BoxDecoration(color: Colors.teal, borderRadius: BorderRadius.circular(20)),
+                      child: Text(
+                        "${_currentImageIndex + 1} / ${images.length}",
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  if (images.length > 1)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 5.0),
+                      child: Text("Swipe to see more photos", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                    ),
+                ],
+              ),
+            
+            SizedBox(height: 20),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                 Text("Price:", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                 Text("₹${widget.data['askPrice']}", style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.green)),
+              ],
+            ),
+            Divider(),
+            Text("Customer Info:", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            Text("Name: ${widget.data['userName']}"),
+            Text("Phone: ${widget.data['userPhone'] ?? 'Not Available'}"), 
+            
+            Divider(),
+            Text("Waste Info:", style: TextStyle(fontWeight: FontWeight.bold)),
+            Text(widget.data['wasteInfo']),
+            
+            SizedBox(height: 10),
+            Text("User Note:", style: TextStyle(fontWeight: FontWeight.bold)),
+            Container(
+              width: double.infinity,
+              padding: EdgeInsets.all(10),
+              color: Colors.yellow[50],
+              child: Text("${widget.data['notes'] ?? 'No notes provided.'}"),
+            ),
           ],
         ),
-        Divider(),
-        Text("Customer Info:", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-        Text("Name: ${data['userName']}"),
-        Text("Phone: ${data['userPhone'] ?? 'Not Available'}"), 
-        Divider(),
-        Text("Waste Info:", style: TextStyle(fontWeight: FontWeight.bold)),
-        Text(data['wasteInfo']),
-        SizedBox(height: 10),
-        Text("User Note:", style: TextStyle(fontWeight: FontWeight.bold)),
-        Text("${data['notes']}"),
-      ])),
+      ),
     );
   }
 }
@@ -498,10 +559,11 @@ class _CollectorProfileTabState extends State<CollectorProfileTab> {
                   itemBuilder: (context, index) {
                     var data = completed.elementAt(index).data() as Map<String, dynamic>;
                     String price = data['askPrice'] ?? "??";
+                    
                     String imgUrl = "";
                     if (data['imageUrls'] != null && (data['imageUrls'] as List).isNotEmpty) imgUrl = data['imageUrls'][0];
                     else if (data['imageUrl'] != null) imgUrl = data['imageUrl'];
-                    
+
                     return Card(
                       margin: EdgeInsets.symmetric(horizontal: 20, vertical: 5),
                       child: ListTile(

@@ -41,11 +41,23 @@ class _AvailableJobsTabState extends State<AvailableJobsTab> {
   Position? _myPosition;
   @override
   void initState() { super.initState(); _getLocation(); }
-  Future<void> _getLocation() async { try { Position p = await Geolocator.getCurrentPosition(); if(mounted) setState(() => _myPosition = p); } catch(e){} }
-  String _getDistance(double lat, double long) { if(_myPosition==null) return "..."; return "${(Geolocator.distanceBetween(_myPosition!.latitude, _myPosition!.longitude, lat, long)/1000).toStringAsFixed(1)} km"; }
+
+  Future<void> _getLocation() async {
+    try {
+      Position p = await Geolocator.getCurrentPosition();
+      if(mounted) setState(() => _myPosition = p);
+    } catch(e){}
+  }
+
+  String _getDistance(double lat, double long) {
+    if(_myPosition == null) return "...";
+    return "${(Geolocator.distanceBetween(_myPosition!.latitude, _myPosition!.longitude, lat, long)/1000).toStringAsFixed(1)} km";
+  }
 
   Future<void> _handleJob(String docId, String action, {String? offerPrice}) async {
-    final user = FirebaseAuth.instance.currentUser!;
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return; 
+
     String name = user.displayName ?? "Collector";
     String phone = "Not Provided";
     try {
@@ -112,17 +124,27 @@ class _AvailableJobsTabState extends State<AvailableJobsTab> {
         builder: (context, snapshot) {
           if (!snapshot.hasData) return Center(child: CircularProgressIndicator());
           if (snapshot.data!.docs.isEmpty) return Center(child: Text("No jobs available nearby."));
-          
+
           return ListView(children: snapshot.data!.docs.map((doc) {
             var data = doc.data() as Map<String, dynamic>;
             String price = data['askPrice'] ?? "N/A";
             String wasteInfo = data['wasteInfo'].toString().split('|')[0];
-            String estPrice = data['wasteInfo'].toString().contains('Price') ? data['wasteInfo'].toString().split('Price:')[1].split('|')[0] : "??";
             
-            // Image handling: Explicitly only take the first one for the list
+            // Safe Parsing
+            String estPrice = "??";
+            String fullInfo = data['wasteInfo'].toString();
+            if (fullInfo.contains("Price:")) {
+              List<String> parts = fullInfo.split("Price:");
+              if (parts.length > 1) {
+                estPrice = parts[1].split("|")[0].trim();
+              }
+            }
+
             String imgUrl = "";
             if (data['imageUrls'] != null && (data['imageUrls'] as List).isNotEmpty) imgUrl = data['imageUrls'][0];
             else if (data['imageUrl'] != null) imgUrl = data['imageUrl'];
+
+            bool hasLocation = data['latitude'] != null && data['longitude'] != null;
 
             return Card(
               margin: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -132,14 +154,23 @@ class _AvailableJobsTabState extends State<AvailableJobsTab> {
                   ListTile(
                     contentPadding: EdgeInsets.all(10),
                     leading: imgUrl.isNotEmpty 
-                      ? ClipRRect(borderRadius: BorderRadius.circular(5), child: Image.network(imgUrl, width: 70, height: 70, fit: BoxFit.cover))
+                      ? ClipRRect(
+                          borderRadius: BorderRadius.circular(5), 
+                          child: Image.network(
+                            imgUrl, width: 70, height: 70, fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) => Icon(Icons.broken_image, color: Colors.grey),
+                          )
+                        )
                       : CircleAvatar(backgroundColor: Colors.grey[200], child: Icon(Icons.recycling)),
                     title: Text(wasteInfo, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                     subtitle: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         SizedBox(height: 5),
-                        Row(children: [Icon(Icons.location_on, size: 14, color: Colors.grey), Text(" ${_getDistance(data['latitude'], data['longitude'])}")]),
+                        Row(children: [
+                          Icon(Icons.location_on, size: 14, color: Colors.grey), 
+                          Text(hasLocation ? " ${_getDistance(data['latitude'], data['longitude'])}" : " Loc N/A")
+                        ]),
                         Text("AI Est: $estPrice", style: TextStyle(color: Colors.grey, fontSize: 12)),
                       ],
                     ),
@@ -184,8 +215,7 @@ class _AvailableJobsTabState extends State<AvailableJobsTab> {
 
 // ---------------- TAB 2: ACTIVE JOBS ---------------- //
 class ActiveJobsTab extends StatelessWidget {
-  final String myId = FirebaseAuth.instance.currentUser!.uid;
-
+  
   Future<void> _confirmPickup(DocumentSnapshot doc) async {
     await doc.reference.update({'collectorConfirmed': true});
   }
@@ -197,6 +227,8 @@ class ActiveJobsTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final String myId = FirebaseAuth.instance.currentUser?.uid ?? "";
+
     return Scaffold(
       appBar: AppBar(title: Text("Active Jobs"), backgroundColor: Colors.orange),
       body: StreamBuilder<QuerySnapshot>(
@@ -286,7 +318,6 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Logic to get all images
     List<String> images = [];
     if (widget.data['imageUrls'] != null) {
       images = List<String>.from(widget.data['imageUrls']);
@@ -296,84 +327,53 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
 
     return Scaffold(
       appBar: AppBar(title: Text("Job Info")),
-      body: SingleChildScrollView(
-        padding: EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 📸 CAROUSEL / SLIDER LOGIC
-            if (images.isNotEmpty) 
-              Column(
-                children: [
-                  SizedBox(
-                    height: 300, // Taller image view
-                    child: PageView.builder(
-                      itemCount: images.length,
-                      onPageChanged: (index) {
-                        setState(() => _currentImageIndex = index);
-                      },
-                      itemBuilder: (context, index) {
-                        return Container(
-                          margin: EdgeInsets.symmetric(horizontal: 5),
-                          decoration: BoxDecoration(
-                            border: Border.all(color: Colors.grey[300]!),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(10),
-                            child: Image.network(images[index], fit: BoxFit.cover),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                  SizedBox(height: 10),
-                  // Image Counter (e.g., 1/3)
-                  if (images.length > 1)
-                    Container(
-                      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-                      decoration: BoxDecoration(color: Colors.teal, borderRadius: BorderRadius.circular(20)),
-                      child: Text(
-                        "${_currentImageIndex + 1} / ${images.length}",
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+      body: SingleChildScrollView(padding: EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (images.isNotEmpty) 
+          Column(
+            children: [
+              SizedBox(
+                height: 300,
+                child: PageView.builder(
+                  itemCount: images.length,
+                  onPageChanged: (index) => setState(() => _currentImageIndex = index),
+                  itemBuilder: (context, index) {
+                    return Container(
+                      margin: EdgeInsets.symmetric(horizontal: 5),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(10), 
+                        child: Image.network(
+                          images[index], fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) => Center(child: Icon(Icons.broken_image, size: 50, color: Colors.grey)),
+                        )
                       ),
-                    ),
-                  if (images.length > 1)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 5.0),
-                      child: Text("Swipe to see more photos", style: TextStyle(color: Colors.grey, fontSize: 12)),
-                    ),
-                ],
+                    );
+                  },
+                ),
               ),
-            
-            SizedBox(height: 20),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                 Text("Price:", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                 Text("₹${widget.data['askPrice']}", style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.green)),
-              ],
-            ),
-            Divider(),
-            Text("Customer Info:", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            Text("Name: ${widget.data['userName']}"),
-            Text("Phone: ${widget.data['userPhone'] ?? 'Not Available'}"), 
-            
-            Divider(),
-            Text("Waste Info:", style: TextStyle(fontWeight: FontWeight.bold)),
-            Text(widget.data['wasteInfo']),
-            
-            SizedBox(height: 10),
-            Text("User Note:", style: TextStyle(fontWeight: FontWeight.bold)),
-            Container(
-              width: double.infinity,
-              padding: EdgeInsets.all(10),
-              color: Colors.yellow[50],
-              child: Text("${widget.data['notes'] ?? 'No notes provided.'}"),
-            ),
+              if (images.length > 1) 
+                 Padding(padding: EdgeInsets.only(top: 5), child: Text("${_currentImageIndex + 1}/${images.length} - Swipe for more", style: TextStyle(fontSize: 12, color: Colors.grey))),
+            ],
+          ),
+        
+        SizedBox(height: 10),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+             Text("Price:", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+             Text("₹${widget.data['askPrice']}", style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.green)),
           ],
         ),
-      ),
+        Divider(),
+        Text("Customer Info:", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        Text("Name: ${widget.data['userName']}"),
+        Text("Phone: ${widget.data['userPhone'] ?? 'Not Available'}"), 
+        Divider(),
+        Text("Waste Info:", style: TextStyle(fontWeight: FontWeight.bold)),
+        Text(widget.data['wasteInfo']),
+        SizedBox(height: 10),
+        Text("User Note:", style: TextStyle(fontWeight: FontWeight.bold)),
+        Text("${widget.data['notes']}"),
+      ])),
     );
   }
 }
@@ -385,7 +385,8 @@ class CollectorProfileTab extends StatefulWidget {
 }
 
 class _CollectorProfileTabState extends State<CollectorProfileTab> {
-  final user = FirebaseAuth.instance.currentUser!;
+  User? get user => FirebaseAuth.instance.currentUser;
+
   final _nameController = TextEditingController();
   final _phoneController = TextEditingController();
   final _vehicleController = TextEditingController();
@@ -398,33 +399,39 @@ class _CollectorProfileTabState extends State<CollectorProfileTab> {
   }
 
   Future<void> _loadProfile() async {
+    final currentUser = user;
+    if (currentUser == null) return;
+
     try {
-      final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      final doc = await FirebaseFirestore.instance.collection('users').doc(currentUser.uid).get();
       if (doc.exists && mounted) {
         setState(() {
-          _nameController.text = doc['name'] ?? user.displayName ?? "";
+          _nameController.text = doc['name'] ?? currentUser.displayName ?? "";
           _phoneController.text = doc['phone'] ?? "";
           _vehicleController.text = doc['vehicle'] ?? "";
         });
       } else if (mounted) {
-        _nameController.text = user.displayName ?? "";
+        _nameController.text = currentUser.displayName ?? "";
       }
     } catch (e) { print(e); }
   }
 
   Future<void> _saveProfile() async {
-    await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+    final currentUser = user;
+    if (currentUser == null) return;
+
+    await FirebaseFirestore.instance.collection('users').doc(currentUser.uid).set({
       'name': _nameController.text.trim(),
       'phone': _phoneController.text.trim(),
       'vehicle': _vehicleController.text.trim(),
       'role': 'collector',
-      'email': user.email,
+      'email': currentUser.email,
     }, SetOptions(merge: true));
-    
+
     if (_nameController.text.isNotEmpty) {
-      await user.updateDisplayName(_nameController.text.trim());
+      await currentUser.updateDisplayName(_nameController.text.trim());
     }
-    
+
     if (mounted) {
       setState(() => _isEditing = false);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Profile Updated!")));
@@ -443,7 +450,10 @@ class _CollectorProfileTabState extends State<CollectorProfileTab> {
 
   @override
   Widget build(BuildContext context) {
-    String displayName = _nameController.text.isNotEmpty ? _nameController.text : (user.displayName ?? "Collector");
+    final currentUser = user;
+    if (currentUser == null) return Scaffold(body: Center(child: CircularProgressIndicator()));
+
+    String displayName = _nameController.text.isNotEmpty ? _nameController.text : (currentUser.displayName ?? "Collector");
     String initials = _getSafeInitials(displayName);
 
     return Scaffold(
@@ -461,7 +471,7 @@ class _CollectorProfileTabState extends State<CollectorProfileTab> {
       ),
       body: StreamBuilder<QuerySnapshot>(
         stream: FirebaseFirestore.instance.collection('requests')
-            .where('collectorId', isEqualTo: user.uid)
+            .where('collectorId', isEqualTo: currentUser.uid)
             .snapshots(),
         builder: (context, snapshot) {
           if (!snapshot.hasData) return Center(child: CircularProgressIndicator());
@@ -568,7 +578,7 @@ class _CollectorProfileTabState extends State<CollectorProfileTab> {
                       margin: EdgeInsets.symmetric(horizontal: 20, vertical: 5),
                       child: ListTile(
                         leading: imgUrl.isNotEmpty
-                            ? ClipRRect(borderRadius: BorderRadius.circular(5), child: Image.network(imgUrl, width: 50, height: 50, fit: BoxFit.cover)) 
+                            ? ClipRRect(borderRadius: BorderRadius.circular(5), child: Image.network(imgUrl, width: 50, height: 50, fit: BoxFit.cover, errorBuilder: (context, error, stackTrace) => Icon(Icons.history))) 
                             : Icon(Icons.history),
                         title: Text(data['wasteInfo'].toString().split('|')[0]),
                         subtitle: Text(DateFormat('MMM d').format((data['timestamp'] as Timestamp).toDate())),

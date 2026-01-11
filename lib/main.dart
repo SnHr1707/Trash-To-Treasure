@@ -4,7 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart' hide EmailAuthProvider;
 import 'package:firebase_ui_auth/firebase_ui_auth.dart';
 import 'package:firebase_ui_oauth_google/firebase_ui_oauth_google.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart'; // NEW
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'firebase_options.dart';
 import 'household_screen.dart';
 import 'collector_screen.dart';
@@ -13,12 +13,16 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   
-  // Load Environment variables
-  await dotenv.load(fileName: ".env");
+  // Try to load dotenv, but don't crash if it fails (common in web deployment)
+  try {
+    await dotenv.load(fileName: ".env");
+  } catch(e) {
+    print("Warning: Could not load .env file. This is expected on deployed web if not explicitly included in assets.");
+  }
 
   FirebaseUIAuth.configureProviders([
     EmailAuthProvider(),
-    GoogleProvider(clientId: dotenv.env['GOOGLE_CLIENT_ID'] ?? ""), 
+    GoogleProvider(clientId: dotenv.env['GOOGLE_CLIENT_ID'] ?? ""),
   ]);
 
   runApp(MyApp());
@@ -30,7 +34,7 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        useMaterial3: true, 
+        useMaterial3: true,
         colorSchemeSeed: Colors.green,
         inputDecorationTheme: InputDecorationTheme(filled: true, fillColor: Colors.white),
       ),
@@ -48,7 +52,7 @@ class AuthGate extends StatelessWidget {
         if (!snapshot.hasData) {
           return SignInScreen(
             providers: [EmailAuthProvider(), GoogleProvider(clientId: dotenv.env['GOOGLE_CLIENT_ID'] ?? "")],
-            headerBuilder: (context, constraints, _) => 
+            headerBuilder: (context, constraints, _) =>
               Padding(padding: EdgeInsets.all(20), child: Icon(Icons.recycling, size: 80, color: Colors.green)),
           );
         }
@@ -94,7 +98,7 @@ class _RoleCheckState extends State<RoleCheck> {
   @override
   Widget build(BuildContext context) {
     if (role == null) return Scaffold(body: Center(child: CircularProgressIndicator()));
-    
+
     if (role == 'new') {
       return Scaffold(
         body: Center(

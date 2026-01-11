@@ -8,7 +8,11 @@ import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_rating_bar/flutter_rating_bar.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
+
+// ------------------------------------------------------------------
+// ⚠️ IMPORTANT: PASTE YOUR KEYS HERE FOR DEPLOYMENT TO WORK
+// ------------------------------------------------------------------      // e.g. "sk-or-v1-..."
+// ------------------------------------------------------------------
 
 class HouseholdScreen extends StatefulWidget {
   @override
@@ -36,7 +40,7 @@ class _HouseholdScreenState extends State<HouseholdScreen> {
   }
 }
 
-// ---------------- TAB 1: SELL WASTE (Flexible Image Input) ---------------- //
+// ---------------- TAB 1: SELL WASTE ---------------- //
 class RequestTab extends StatefulWidget {
   @override
   _RequestTabState createState() => _RequestTabState();
@@ -45,24 +49,18 @@ class RequestTab extends StatefulWidget {
 class _RequestTabState extends State<RequestTab> {
   List<Uint8List> _imageBytesList = [];
   List<XFile> _pickedFiles = [];
-  
+
   String _aiResult = "Snap photos to see AI Price Estimate";
-  String _detectedCategory = "General"; 
+  String _detectedCategory = "General";
   bool _isAnalyzing = false;
   final TextEditingController _notesController = TextEditingController();
   final TextEditingController _priceController = TextEditingController();
 
-  final String cloudName = dotenv.env['CLOUDINARY_CLOUD_NAME'] ?? "";
-  final String uploadPreset = dotenv.env['CLOUDINARY_UPLOAD_PRESET'] ?? "";
-  final String openRouterKey = dotenv.env['OPENROUTER_API_KEY'] ?? "";
-  final String modelName = "nvidia/nemotron-nano-12b-v2-vl:free"; 
+  final String modelName = "nvidia/nemotron-nano-12b-v2-vl:free";
 
-  // Combined function to handle both Camera and Gallery
   Future<void> _pickImages(ImageSource source) async {
     final picker = ImagePicker();
-    
     if (source == ImageSource.gallery) {
-      // Pick Multiple from Gallery
       final List<XFile>? photos = await picker.pickMultiImage();
       if (photos != null && photos.isNotEmpty) {
         for (var photo in photos) {
@@ -72,13 +70,11 @@ class _RequestTabState extends State<RequestTab> {
             _imageBytesList.add(bytes);
           });
         }
-        // Analyze the first image added if not already analyzed
         if (!_isAnalyzing && _imageBytesList.isNotEmpty) {
            _analyzeWithNvidia(_imageBytesList.first);
         }
       }
     } else {
-      // Pick Single from Camera
       final XFile? photo = await picker.pickImage(source: ImageSource.camera);
       if (photo != null) {
         var bytes = await photo.readAsBytes();
@@ -86,7 +82,6 @@ class _RequestTabState extends State<RequestTab> {
           _pickedFiles.add(photo);
           _imageBytesList.add(bytes);
         });
-        // Analyze immediately if it's the first/only image
         if (!_isAnalyzing) {
            _analyzeWithNvidia(bytes);
         }
@@ -102,14 +97,24 @@ class _RequestTabState extends State<RequestTab> {
   }
 
   Future<void> _analyzeWithNvidia(Uint8List imageBytes) async {
-    if (openRouterKey.isEmpty) return;
+    // 1. Check Key
+    if (OPENROUTER_API_KEY.contains("YOUR_") || OPENROUTER_API_KEY.isEmpty) {
+      setState(() => _aiResult = "Error: OpenRouter API Key not set in code.");
+      return;
+    }
+
     setState(() => _isAnalyzing = true);
-    
+
     try {
       String base64Image = base64Encode(imageBytes);
       final response = await http.post(
         Uri.parse("https://openrouter.ai/api/v1/chat/completions"),
-        headers: { "Authorization": "Bearer $openRouterKey", "Content-Type": "application/json" },
+        headers: { 
+          "Authorization": "Bearer $OPENROUTER_API_KEY", 
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://waste-market.web.app", // Optional: Your site URL
+          "X-Title": "Waste Market", // Optional: Your app name
+        },
         body: jsonEncode({
           "model": modelName,
           "messages": [
@@ -121,45 +126,70 @@ class _RequestTabState extends State<RequestTab> {
           ]
         }),
       );
+      
       if (response.statusCode == 200) {
         String content = jsonDecode(response.body)['choices'][0]['message']['content'];
         String cat = "General";
         if (content.contains("Category:")) {
-          try { cat = content.split("Category:")[1].split("|")[0].trim(); } catch(e) {}
+          try { 
+            var parts = content.split("Category:");
+            if(parts.length > 1) cat = parts[1].split("|")[0].trim(); 
+          } catch(e) {}
         }
         setState(() { _aiResult = content; _detectedCategory = cat; _isAnalyzing = false; });
       } else {
-        setState(() { _aiResult = "AI Error. Try again."; _isAnalyzing = false; });
+        setState(() { _aiResult = "AI Error (${response.statusCode}). Check Quota/Key."; _isAnalyzing = false; });
       }
-    } catch (e) { setState(() { _aiResult = "Connection Error"; _isAnalyzing = false; }); }
+    } catch (e) { 
+      setState(() { _aiResult = "Connection Error: $e"; _isAnalyzing = false; }); 
+    }
   }
 
   Future<void> _submitRequest() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("You must be logged in!")));
+      return;
+    }
+
+    // 2. Check Cloudinary Keys
+    if (CLOUDINARY_CLOUD_NAME.contains("YOUR_") || CLOUDINARY_UPLOAD_PRESET.contains("YOUR_")) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: Cloudinary keys not set in code!")));
+      return;
+    }
+
     if (_imageBytesList.isEmpty) { ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("No images!"))); return; }
     if (_priceController.text.isEmpty) { ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Please enter a selling price!"))); return; }
-    
+
     setState(() => _isAnalyzing = true);
 
     try {
       List<String> uploadedUrls = [];
 
+      // UPLOAD IMAGES
       for (int i = 0; i < _imageBytesList.length; i++) {
-        var request = http.MultipartRequest("POST", Uri.parse("https://api.cloudinary.com/v1_1/$cloudName/image/upload"));
-        // Handle Web vs Mobile file source
+        var request = http.MultipartRequest("POST", Uri.parse("https://api.cloudinary.com/v1_1/$CLOUDINARY_CLOUD_NAME/image/upload"));
         if (kIsWeb) {
           request.files.add(http.MultipartFile.fromBytes('file', _imageBytesList[i], filename: 'waste_$i.jpg'));
         } else {
           request.files.add(await http.MultipartFile.fromPath('file', _pickedFiles[i].path));
         }
-        request.fields['upload_preset'] = uploadPreset;
+        request.fields['upload_preset'] = CLOUDINARY_UPLOAD_PRESET;
+        
         var response = await request.send();
         if(response.statusCode == 200) {
-          var jsonMap = jsonDecode(await response.stream.bytesToString());
+          var responseData = await response.stream.bytesToString();
+          var jsonMap = jsonDecode(responseData);
           uploadedUrls.add(jsonMap['secure_url']);
+        } else {
+          print("Upload Failed: ${response.statusCode}");
         }
       }
 
-      final user = FirebaseAuth.instance.currentUser!;
+      if (uploadedUrls.isEmpty) {
+        throw Exception("Image upload failed. Check Cloudinary settings.");
+      }
+
       final userDoc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
       String userPhone = userDoc.exists ? (userDoc.data()?['phone'] ?? "Not Provided") : "Not Provided";
       
@@ -176,7 +206,7 @@ class _RequestTabState extends State<RequestTab> {
         'category': _detectedCategory,
         'askPrice': _priceController.text, 
         'imageUrls': uploadedUrls, 
-        'imageUrl': uploadedUrls.isNotEmpty ? uploadedUrls.first : null,
+        'imageUrl': uploadedUrls.first, // Legacy support
         'notes': _notesController.text,
         'status': 'pending', 
         'latitude': pos.latitude,
@@ -207,7 +237,6 @@ class _RequestTabState extends State<RequestTab> {
         padding: EdgeInsets.all(20),
         child: Column(
           children: [
-            // 1. Image Selection Area
             Row(
               children: [
                 Expanded(
@@ -229,10 +258,8 @@ class _RequestTabState extends State<RequestTab> {
                 ),
               ],
             ),
-            
             SizedBox(height: 10),
             
-            // Image List with Remove Button
             if (_imageBytesList.isNotEmpty)
               Container(
                 height: 120,
@@ -276,7 +303,6 @@ class _RequestTabState extends State<RequestTab> {
             
             SizedBox(height: 20),
             
-            // AI Result
             Container(
               padding: EdgeInsets.all(15),
               decoration: BoxDecoration(color: Colors.blue[50], borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.blue.shade200)),
@@ -318,14 +344,15 @@ class _RequestTabState extends State<RequestTab> {
   }
 }
 
-// ---------------- TAB 2: ACTIVITY (Cancel Added) ---------------- //
+// ---------------- TAB 2: ACTIVITY ---------------- //
 class ActivityTab extends StatefulWidget {
   @override
   _ActivityTabState createState() => _ActivityTabState();
 }
 
 class _ActivityTabState extends State<ActivityTab> {
-  final user = FirebaseAuth.instance.currentUser!;
+  User? get user => FirebaseAuth.instance.currentUser;
+
   String _searchQuery = "";
   String _selectedCategory = "All";
   bool _showHistory = false;
@@ -347,10 +374,9 @@ class _ActivityTabState extends State<ActivityTab> {
     }
   }
 
-  // NEW: Cancel Request Function
   Future<void> _cancelRequest(String docId) async {
     bool? confirm = await showDialog(
-      context: context, 
+      context: context,
       builder: (context) => AlertDialog(
         title: Text("Cancel Request?"),
         content: Text("Are you sure you want to remove this listing?"),
@@ -416,6 +442,9 @@ class _ActivityTabState extends State<ActivityTab> {
 
   @override
   Widget build(BuildContext context) {
+    final currentUser = user;
+    if (currentUser == null) return Center(child: Text("Please log in."));
+
     return Scaffold(
       appBar: AppBar(title: Text("My Activity"), centerTitle: true),
       body: Column(
@@ -473,7 +502,7 @@ class _ActivityTabState extends State<ActivityTab> {
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
               stream: FirebaseFirestore.instance.collection('requests')
-                .where('userId', isEqualTo: user.uid)
+                .where('userId', isEqualTo: currentUser.uid)
                 .orderBy('timestamp', descending: true)
                 .snapshots(),
               builder: (context, snapshot) {
@@ -517,7 +546,13 @@ class _ActivityTabState extends State<ActivityTab> {
                         children: [
                           ListTile(
                             leading: thumbUrl.isNotEmpty 
-                              ? ClipRRect(borderRadius: BorderRadius.circular(5), child: Image.network(thumbUrl, width: 60, height: 60, fit: BoxFit.cover)) 
+                              ? ClipRRect(
+                                  borderRadius: BorderRadius.circular(5), 
+                                  child: Image.network(
+                                    thumbUrl, width: 60, height: 60, fit: BoxFit.cover,
+                                    errorBuilder: (context, error, stackTrace) => Icon(Icons.broken_image, size: 40, color: Colors.grey),
+                                  )
+                                ) 
                               : Icon(Icons.recycling, size: 40),
                             title: Text(data['wasteInfo'].toString().split('|')[0], maxLines: 1, overflow: TextOverflow.ellipsis),
                             subtitle: Column(
@@ -539,7 +574,6 @@ class _ActivityTabState extends State<ActivityTab> {
                             onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => FullHistoryScreen(data: data))),
                           ),
                           
-                          // NEGOTIATION UI
                           if (status == 'negotiating')
                             Container(
                               color: Colors.orange[50],
@@ -558,7 +592,6 @@ class _ActivityTabState extends State<ActivityTab> {
                               ),
                             ),
 
-                          // CANCEL BUTTON (Only for pending/negotiating)
                           if (status == 'pending' || status == 'negotiating')
                             Padding(
                               padding: const EdgeInsets.only(bottom: 8.0),
@@ -621,8 +654,6 @@ class _FullHistoryScreenState extends State<FullHistoryScreen> {
   @override
   Widget build(BuildContext context) {
     String price = widget.data['askPrice'] ?? "N/A";
-    
-    // Logic to get all images
     List<String> images = [];
     if (widget.data['imageUrls'] != null) {
       images = List<String>.from(widget.data['imageUrls']);
@@ -637,7 +668,6 @@ class _FullHistoryScreenState extends State<FullHistoryScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 📸 CAROUSEL / SLIDER LOGIC
             if (images.isNotEmpty) 
               Column(
                 children: [
@@ -645,36 +675,27 @@ class _FullHistoryScreenState extends State<FullHistoryScreen> {
                     height: 300,
                     child: PageView.builder(
                       itemCount: images.length,
-                      onPageChanged: (index) {
-                        setState(() => _currentImageIndex = index);
-                      },
+                      onPageChanged: (index) => setState(() => _currentImageIndex = index),
                       itemBuilder: (context, index) {
                         return Container(
                           margin: EdgeInsets.symmetric(horizontal: 5),
                           child: ClipRRect(
-                            borderRadius: BorderRadius.circular(10),
-                            child: Image.network(images[index], fit: BoxFit.cover),
+                            borderRadius: BorderRadius.circular(10), 
+                            child: Image.network(
+                              images[index], fit: BoxFit.cover,
+                              errorBuilder: (context, error, stackTrace) => Center(child: Icon(Icons.broken_image, size: 50, color: Colors.grey)),
+                            )
                           ),
                         );
                       },
                     ),
                   ),
-                  SizedBox(height: 10),
-                  // Image Counter (e.g., 1/3)
-                  if (images.length > 1)
-                    Container(
-                      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-                      decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(20)),
-                      child: Text(
-                        "${_currentImageIndex + 1} / ${images.length}",
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                      ),
-                    ),
+                  if (images.length > 1) 
+                     Padding(padding: EdgeInsets.only(top: 5), child: Text("${_currentImageIndex + 1}/${images.length} - Swipe for more", style: TextStyle(fontSize: 12, color: Colors.grey))),
                 ],
               ),
-
-            SizedBox(height: 20),
             
+            SizedBox(height: 20),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -683,7 +704,6 @@ class _FullHistoryScreenState extends State<FullHistoryScreen> {
               ],
             ),
             Divider(),
-            
             Text("AI Description:", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             Container(
               width: double.infinity,
@@ -691,10 +711,8 @@ class _FullHistoryScreenState extends State<FullHistoryScreen> {
               decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(5)),
               child: Text(widget.data['wasteInfo'] ?? ""),
             ),
-            
             SizedBox(height: 10),
             Text("Category: ${widget.data['category'] ?? 'General'}"),
-            
             Divider(),
             Text("Collector Info:", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             Text("Name: ${widget.data['collectorName'] ?? 'Pending'}"),
@@ -709,13 +727,15 @@ class _FullHistoryScreenState extends State<FullHistoryScreen> {
   }
 }
 
+// ---------------- TAB 3: PROFILE ---------------- //
 class ProfileTab extends StatefulWidget {
   @override
   _ProfileTabState createState() => _ProfileTabState();
 }
 
 class _ProfileTabState extends State<ProfileTab> {
-  final user = FirebaseAuth.instance.currentUser!;
+  User? get user => FirebaseAuth.instance.currentUser;
+
   final _nameController = TextEditingController();
   final _phoneController = TextEditingController();
   bool _isEditing = false;
@@ -727,28 +747,41 @@ class _ProfileTabState extends State<ProfileTab> {
   }
 
   Future<void> _loadUserData() async {
+    final currentUser = user;
+    if (currentUser == null) return;
+
     try {
-      final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      final doc = await FirebaseFirestore.instance.collection('users').doc(currentUser.uid).get();
       if (doc.exists && mounted) {
         setState(() {
-          _nameController.text = doc.data()?['name'] ?? user.displayName ?? "";
+          _nameController.text = doc.data()?['name'] ?? currentUser.displayName ?? "";
           _phoneController.text = doc.data()?['phone'] ?? "";
         });
       } else {
-        if (mounted) _nameController.text = user.displayName ?? "";
+        if (mounted) _nameController.text = currentUser.displayName ?? "";
       }
     } catch (e) { print(e); }
   }
 
   Future<void> _saveProfile() async {
-    await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+    final currentUser = user;
+    if (currentUser == null) return;
+
+    await FirebaseFirestore.instance.collection('users').doc(currentUser.uid).set({
       'name': _nameController.text.trim(),
       'phone': _phoneController.text.trim(),
-      'email': user.email,
+      'email': currentUser.email,
       'role': 'household',
     }, SetOptions(merge: true));
-    if (_nameController.text.isNotEmpty) await user.updateDisplayName(_nameController.text.trim());
-    if (mounted) { setState(() => _isEditing = false); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Profile Updated!"))); }
+
+    if (_nameController.text.isNotEmpty) {
+      await currentUser.updateDisplayName(_nameController.text.trim());
+    }
+
+    if (mounted) {
+      setState(() => _isEditing = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Profile Updated!")));
+    }
   }
 
   String _getSafeInitials(String name) {
@@ -762,7 +795,10 @@ class _ProfileTabState extends State<ProfileTab> {
 
   @override
   Widget build(BuildContext context) {
-    String displayName = _nameController.text.isNotEmpty ? _nameController.text : (user.displayName ?? "User");
+    final currentUser = user;
+    if (currentUser == null) return Center(child: CircularProgressIndicator());
+
+    String displayName = _nameController.text.isNotEmpty ? _nameController.text : (currentUser.displayName ?? "User");
     String initials = _getSafeInitials(displayName);
 
     return Scaffold(
@@ -774,7 +810,7 @@ class _ProfileTabState extends State<ProfileTab> {
             CircleAvatar(radius: 50, backgroundColor: Colors.green[100], child: Text(initials, style: TextStyle(fontSize: 40, fontWeight: FontWeight.bold, color: Colors.green[800]))),
             SizedBox(height: 20),
             StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance.collection('requests').where('userId', isEqualTo: user.uid).snapshots(),
+              stream: FirebaseFirestore.instance.collection('requests').where('userId', isEqualTo: currentUser.uid).snapshots(),
               builder: (context, snapshot) {
                 if(!snapshot.hasData) return SizedBox();
                 int total = snapshot.data!.docs.length;
@@ -788,7 +824,7 @@ class _ProfileTabState extends State<ProfileTab> {
               SizedBox(height: 15),
               TextField(controller: _phoneController, enabled: _isEditing, decoration: InputDecoration(labelText: "Phone Number", prefixIcon: Icon(Icons.phone), border: OutlineInputBorder())),
               SizedBox(height: 15),
-              TextField(enabled: false, controller: TextEditingController(text: user.email), decoration: InputDecoration(labelText: "Email", prefixIcon: Icon(Icons.email), border: OutlineInputBorder())),
+              TextField(enabled: false, controller: TextEditingController(text: currentUser.email), decoration: InputDecoration(labelText: "Email", prefixIcon: Icon(Icons.email), border: OutlineInputBorder())),
             ])),
             SizedBox(height: 20),
             ElevatedButton(onPressed: () => FirebaseAuth.instance.signOut(), child: Text("Logout"), style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white))

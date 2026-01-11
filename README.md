@@ -2,6 +2,8 @@
 
 **EcoConnect** is a cross-platform mobile application built with **Flutter** that bridges the gap between households (waste sellers) and local scrap collectors (buyers). It leverages **Generative AI** to identify waste items and estimate their value, facilitating a transparent and efficient recycling economy.
 
+**Video Link**: https://drive.google.com/file/d/19Fta2pcX7G6Yt_B6qj2nCHvAHPXO3ZPd/view?usp=sharing
+
 ---
 
 ## 📱 Features
@@ -80,8 +82,8 @@ flutter pub get
 CLOUDINARY_CLOUD_NAME=your_cloud_name
 CLOUDINARY_UPLOAD_PRESET=your_upload_preset
 
-# AI Configuration (OpenRouter)
-OPENROUTER_API_KEY=your_openrouter_api_key
+# AI Configuration (Gemini)
+GEMINI_API_KEY=your_openrouter_api_key
 
 # Google Auth (Web Client ID from Firebase Console)
 GOOGLE_CLIENT_ID=your_web_client_id
